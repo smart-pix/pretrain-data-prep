@@ -1,41 +1,76 @@
 import numpy as np
 from copy import deepcopy
 import pandas as pd
+import math
 
 # charge_levels = [[-9e19, 400], [400, 800], [800,1200], [1200, 9e19]]
 
-def add_noise(data, mu = 0, sig = 80):
+def add_noise(x, mu = 0, sig = 80, shuffled = True):
     '''
     Add random gaussian noise to input data 
-        data (np.array or pd.DataFrame): input data 
+        x (np.array or pd.DataFrame): input data with dims (event, time, 2d image)
         mu (float): mean of noise 
         sig (float): standard deviation of noise
     '''
+    df = deepcopy(x)
+    if shuffled:
+        cols = [c for c in x.columns if c.isnumeric()]
+        data = df[cols]
+    else:
+        data=df
+    
     dshape = data.shape
     noise = np.random.normal(mu, sig, dshape)
-    return data + noise
 
-def apply_threshold(x, thresh = 400):
+    # if integrate: #DEPRECIATED
+    #     noise = np.cumsum(noise, axis = 1)
+    data = data + noise
+    if cols:
+        df[cols] = data
+    else:
+        df = data
+    return df
+
+def apply_threshold(x, thresh = 400, shuffled=True):
     '''
     Apply a threshold to input data
         data (np.array or pd.DataFrame): input data 
         thresh (float): charge threshold to zero out all charge bellow
     '''
-    data = deepcopy(x)
+    df = deepcopy(x)
+    
+    if shuffled: 
+        cols = [c for c in df.columns if c.isnumeric()]
+        data = df[cols]
+    else:
+        data=df
+        
     bellowthresh = data < thresh
     data[bellowthresh] = 0
-    return data
+    
+    if cols:
+        df[cols] = data
+    else:
+        df=data
+        
+    return df
 
-def quantize_manual(x, charge_levels, quant_values):
+def quantize_manual(x, charge_levels, quant_values, shuffled=True):
     '''
-    Currently does nothing but BW would like to add manual quantization here as well
-        data (np.array or pd.DataFrame): input data 
+    Quantize a df with manually defined charge level boundaries
+        x (np.array or pd.DataFrame): input data (with or without labels).
         charge_levels (list, shape=(N-1)): finite charge levels for boundaries of N bins. 
             eg. for N=4 bins with boundaries [-9e19, 400], [400, 800], [800,1200], [1200, 9e19]
             use: charge_levels = [400, 800, 1200]
-        quan_values (list): list of values for each of N charge bins
+        quant_values (list): list of values for each of N charge bins
+        shuffled (bool, default: True): is this dataframe from a dataset shuffled? ie. are
+            clusters and labels both present in the dataframe x
     '''
-    data = deepcopy(x)
+    df = deepcopy(x)
+    if shuffled: 
+        cols = [c for c in df.columns if c.isnumeric()]
+        data = df[cols]
+    
     charge_levels= np.array(charge_levels)
     minval, maxval = [-9e19], [9e19]
 
@@ -62,10 +97,14 @@ def quantize_manual(x, charge_levels, quant_values):
             dfq = pd.DataFrame(quant_values[j]*mask)
         else:
             dfq = dfq+quant_values[j]*mask
+    if cols:
+        df[cols] = dfq
+    else:
+        df = dfq
     try:
-        return dfq
+        return df
     finally:
-        del data, dfq, mask
+        del data, dfq, mask, df
 
 def apply_offset(block, offset, pixel_array_sizeX, pixel_array_sizeY):
     '''
@@ -86,3 +125,29 @@ def apply_offset(block, offset, pixel_array_sizeX, pixel_array_sizeY):
                 if 0 <= new_i < rows and 0 <= new_j < cols:
                     new_block[new_i][new_j] = block[i][j]
     return new_block
+
+def contained(df, axis = 'y'):
+    '''
+    Yeilds the subset of a datframe df with no charge at the edge bins of the image along a specified axis. NOTE: This assumes the combined data and label format in shuffled datasets.
+        axis (str): axis of cluster to project along. 
+    '''
+    dshape = (20,13,21)
+    cols = np.arange(math.prod(dshape)).astype('str')
+    data = df[cols].values.reshape(-1, *dshape)
+    
+    if axis == 'x':
+        projection = data[:,-1,:,:].sum(axis=1)
+    elif axis == 'y':
+        projection = data[:,-1,:,:].sum(axis=2)
+    else:
+        raise ValueError("axis must be either 'x' or 'y'.")
+    
+    contained = np.zeros(len(data)).astype('bool')
+    for i, proj in enumerate(projection):
+        if (proj[0] == 0 and proj[-1] == 0):
+            contained[i] = True
+        
+    dfc = df.loc[contained]
+    # print('OG shape:', df.shape, 'Contained shape:', dfc.shape, 'Frac=',f"{dfc.shape[0]/df.shape[0]:.3f}")
+    
+    return dfc
